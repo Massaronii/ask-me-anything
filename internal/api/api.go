@@ -5,7 +5,6 @@ import (
 
 	"github.com/ask-me-anything.git/internal/store/pgstore/pgstore"
 
-	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -26,8 +25,6 @@ func NewHandler(q *pgstore.Queries) http.Handler {
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.Recoverer, middleware.Logger)
-
-	
 
 	r.Route("/api", func(r chi.Router) {
 		r.Route("rooms", func(r chi.Router) {
@@ -68,5 +65,3 @@ func (h apiHandler) handleReactToMessage(w http.ResponseWriter, r *http.Request)
 func (h apiHandler) handleRemoveReactFromMessage(w http.ResponseWriter, r *http.Request) {}
 
 func (h apiHandler) handleMarkMessageAsAnswered(w http.ResponseWriter, r *http.Request) {}
-
-
