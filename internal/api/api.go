@@ -1,17 +1,26 @@
 package api
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/ask-me-anything.git/internal/store/pgstore/pgstore"
+	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+	"github.com/google/uuid"
 )
 
 type apiHandler struct {
-	q *pgstore.Queries
-	r *chi.Mux
+	q        *pgstore.Queries
+	r        *chi.Mux
+	upgrader websocket.Upgrader
+	subscribers map[string]map[*websocket.Conn]context.CancelFunc
 }
 
 func (h apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -20,11 +29,25 @@ func (h apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func NewHandler(q *pgstore.Queries) http.Handler {
 	a := apiHandler{
-		q: q,
+		q:        q,
+		upgrader: websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
 	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.Recoverer, middleware.Logger)
+
+	r.Use(cors.Handler(cors.Options{
+
+		AllowedOrigins: []string{"https://*", "http://*"},
+
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: false,
+		MaxAge:           300,
+	}))
+
+	r.Get("/subscribe/{room_id}", a.handleSubscribe)
 
 	r.Route("/api", func(r chi.Router) {
 		r.Route("rooms", func(r chi.Router) {
@@ -39,7 +62,7 @@ func NewHandler(q *pgstore.Queries) http.Handler {
 					r.Get("/", a.handleGetRoomMessage)
 					r.Patch("/react", a.handleReactToMessage)
 					r.Delete("/react", a.handleRemoveReactFromMessage)
-					r.Patch("/react", a.handleMarkMessageAsAnswered)
+					r.Patch("/answer", a.handleMarkMessageAsAnswered)
 
 				})
 			})
@@ -48,6 +71,37 @@ func NewHandler(q *pgstore.Queries) http.Handler {
 
 	a.r = r
 	return a
+}
+
+func (h apiHandler) handleSubscribe(w http.ResponseWriter, r *http.Request) {
+	rawRoomID := chi.URLParam(r, "room_id")
+	roomID, err := uuid.Parse(rawRoomID)
+
+	if err != nil {
+		http.Error(w, "invalid room id", http.StatusBadRequest)
+		return
+	}
+	_, err = h.q.GetRoom(r.Context(), roomID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "room not found", http.StatusBadRequest)
+			return
+		}
+
+		http.Error(w, "something went wrong", http.StatusInternalServerError)
+		return
+	}
+		c, err := h.upgrader.Upgrade(w, r, nil)
+
+		if err != nil {
+			slog.Warn("failed to upgrade connection", "error", err)
+						http.Error(w, "failed to upgrade to ws connection", http.StatusBadRequest)
+						return
+		}
+
+		defer c.Close()
+
+		
 }
 
 func (h apiHandler) handleCreateRoom(w http.ResponseWriter, r *http.Request) {}
